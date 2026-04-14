@@ -1,4 +1,6 @@
 fileignoreconfig:
 - filename: README.md
   checksum: 51e7c070b76c3924b348e0d4f6fe999f83132e13d8ed52a76af58b8c720c625a
+- filename: azval.py
+  checksum: 7caee7fa9786ff55d3e39b7c514c3651c2b9899558bc49485dc7d80ef6cca480
 version: "1.0"

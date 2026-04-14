@@ -1,43 +1,48 @@
-# azval: Azure DevOps YAML Validator
+# azval: Azure DevOps YAML Validator (v1.7)
 
-A lightweight, zero-dependency Python script to validate Azure DevOps YAML pipelines via the REST API (v7.1-preview).
+A high-performance, zero-config tool to validate, expand, and analyze Azure DevOps YAML pipelines directly from your terminal.
 
-## Features
+## 🚀 Key Features
 
-1.  **Local Validation:** Validates your local `azure-pipelines.yml` (using `yamlOverride`) before you commit or push.
-2.  **Rich Diagnostics:** If validation fails, it extracts the line and column number from the error message and prints the context from your local file.
-3.  **Runtime Parameters:** Supports passing parameters via `--param key=value` to test how your pipeline expands.
-4.  **Automatic Detection:** Detects your current project name (from folder name), git branch, and local pipeline file.
+1.  **Zero-Config Detection:** Automatically extracts your Organization, Project, and Branch from your `git remote origin`.
+2.  **The Flattener (`--write`):** Export the fully resolved YAML (post-template expansion) to a local file. Perfect for Neovim search and LSP validation.
+3.  **Expanded YAML (`--expand`):** See the final result of your pipeline in the terminal after all templates and parameters are resolved.
+4.  **Bottleneck Analysis (`--timeline`):** Identifies the Top 10 slowest tasks in your last run using the official `7.1-preview.2` Build Timeline API.
+5.  **Rich Diagnostics:** Provides colorized context and a pointer `^` to the exact line/column where a validation error occurred.
 
-## Usage
+## 🛠 Usage
 
-### Prerequisites
-Set your Azure DevOps Personal Access Token (PAT) as an environment variable:
+### Setup
+Ensure you have an Azure DevOps PAT exported:
 ```bash
-export ADO_PAT="your-token-here"
+export ADO_TOKEN="your-token-here"
 ```
 
 ### Examples
 
-**Validate local changes:**
+**Flatten your pipeline for Neovim:**
 ```bash
-azval
+azval --write
+# Opens .expanded-pipeline.yml in Neovim
+nvim .expanded-pipeline.yml
 ```
 
-**Validate a specific pipeline by ID:**
+**Show fully expanded YAML with parameters:**
 ```bash
-azval --id 1234
+azval --expand --param service_type=ECS --param env=dev
 ```
 
-**Pass runtime parameters:**
+**Find bottlenecks in the last pipeline run:**
 ```bash
-azval --param environment=dev --param deploy_infra=true
+azval --timeline
 ```
 
-**Override project or branch:**
+**Validate a specific file against a specific pipeline ID:**
 ```bash
-azval --project MyProject --branch feature/xyz
+azval --file build.yml --id 1234
 ```
 
-## How it works
-The script uses the `POST .../_apis/pipelines/{id}/runs?previewRun=true` endpoint. Even for local validation, it requires a "reference" pipeline ID to provide the context (repository, service connections, etc.). If you don't provide an `--id`, it will automatically try to find one in your project to use as a template.
+## 🏗 Architecture (DevOps Pro Tips)
+- **Pipelines Preview API:** Uses the specialized `/preview` endpoint for high-fidelity YAML expansion.
+- **Project GUID Persistence:** Discovers the Project's unique ID (`99885995-...`) at startup to bypass naming mismatch issues.
+- **Context Fallback:** If your local branch isn't pushed, `azval` automatically falls back to `master` to resolve remote templates.
