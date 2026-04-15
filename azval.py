@@ -106,7 +106,7 @@ def get_timeline(args, pat, project_id, pipeline_id, run_id=None):
 
 def main():
     git_info = get_git_info()
-    parser = argparse.ArgumentParser(description=f"{BOLD}azval: Advanced Azure DevOps YAML Validator (v1.7){RESET}", formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(description=f"{BOLD}azval: Advanced Azure DevOps YAML Validator {RESET}", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--org", default=git_info["org"] or "EACustomerManagement")
     parser.add_argument("--project", default=git_info["project"])
     parser.add_argument("--id", type=int, help="Pipeline ID override")
@@ -124,7 +124,7 @@ def main():
     if not pat: print(f"{RED}Error: ADO_PAT/TOKEN not set.{RESET}"); sys.exit(1)
     if not args.file and os.path.exists("azure-pipelines.yml"): args.file = "azure-pipelines.yml"
 
-    print(f"{BOLD}--- azval v1.7 ---{RESET}")
+    print(f"{BOLD}--- azval ---{RESET}")
     res, status = call_ado_api(args.org, None, f"projects/{args.project}", pat=pat)
     if status != 200: print(f"{RED}Error: Project '{args.project}' not found.{RESET}"); sys.exit(1)
     project_id = res["id"]
