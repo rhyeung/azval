@@ -41,7 +41,7 @@ azval --timeline
 azval --file build.yml --id 1234
 ```
 
-## 🏗Tips and Tricks
+## 🏗 Tips and Tricks
 - **Pipelines Preview API:** Uses the specialized `/preview` endpoint for high-fidelity YAML expansion.
 - **Project GUID Persistence:** Discovers the Project's unique ID (`99885995-...`) at startup to bypass naming mismatch issues.
 - **Context Fallback:** If your local branch isn't pushed, `azval` automatically falls back to `master` to resolve remote templates.
