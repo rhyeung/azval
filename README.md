@@ -46,3 +46,14 @@ azval --file build.yml --id 1234
 - **Pipelines Preview API:** Uses the specialized `/preview` endpoint for high-fidelity YAML expansion.
 - **Project GUID Persistence:** Discovers the Project's unique ID (`99885995-...`) at startup to bypass naming mismatch issues.
 - **Context Fallback:** If your local branch isn't pushed, `azval` automatically falls back to `master` to resolve remote templates.
+
+## ⚠️ Important: The "First Push" Rule
+
+While `azval` allows you to validate local logic without pushing, there is one technical limitation of the Azure DevOps API to keep in mind:
+
+1.  **Main File is Local:** Your main pipeline file (the one passed to `--file`) is sent directly to the API. You can change this as much as you want without pushing.
+2.  **Templates must exist on Remote:** Azure DevOps resolves `template:` calls by looking at the git repository in the cloud. 
+    *   **New Files:** If you create a **brand new** template file or a new folder (like `.azdo/`), you must `git push` it to your branch at least once.
+    *   **Iterating:** Once the file exists on the remote, you can change its content locally and use `azval` to validate it (provided the main pipeline file calls it).
+
+**Rule of Thumb:** If the API says `File not found`, it means you haven't pushed that specific template file to the remote yet!
