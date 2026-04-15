@@ -1,4 +1,4 @@
-# azval: Azure DevOps YAML Validator (v1.7)
+# azval: Azure DevOps YAML Validator
 
 A high-performance, zero-config tool to validate, expand, and analyze Azure DevOps YAML pipelines directly from your terminal.
 
@@ -23,8 +23,7 @@ export ADO_TOKEN="your-token-here"
 **Flatten your pipeline for Neovim:**
 ```bash
 azval --write
-# Opens .expanded-pipeline.yml in Neovim
-nvim .expanded-pipeline.yml
+# Opens .expanded-pipeline.yml in IDE
 ```
 
 **Show fully expanded YAML with parameters:**
@@ -42,7 +41,7 @@ azval --timeline
 azval --file build.yml --id 1234
 ```
 
-## 🏗 Architecture (DevOps Pro Tips)
+## 🏗Tips and Tricks
 - **Pipelines Preview API:** Uses the specialized `/preview` endpoint for high-fidelity YAML expansion.
 - **Project GUID Persistence:** Discovers the Project's unique ID (`99885995-...`) at startup to bypass naming mismatch issues.
 - **Context Fallback:** If your local branch isn't pushed, `azval` automatically falls back to `master` to resolve remote templates.
