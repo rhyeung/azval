@@ -23,6 +23,15 @@ Ensure you have an Azure DevOps PAT exported:
 export ADO_TOKEN="your-token-here"
 ```
 
+### Auto-Detection vs Manual Override
+By default, `azval` looks at your current directory's Git metadata (`git remote get-url origin`) to determine which Organization and Project to target.
+
+*   **If you are in a Git repo:** Simply run `azval -t`.
+*   **If you are NOT in a repo (or detection fails):** Use the manual flags:
+    ```bash
+    azval -o YOUR_ORG -p YOUR_PROJECT -t
+    ```
+
 ### Examples
 
 **List the recent run history to find Build IDs and durations:**
