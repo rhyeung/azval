@@ -194,6 +194,45 @@ def print_blame_header(build):
     print(f"{BOLD}Source:{RESET} {GREEN}{branch}{RESET} @ {YELLOW}{commit}{RESET}")
     print("-" * 25)
 
+def perform_analysis(data):
+    build, records = data["build"], data["timeline"]
+    print(f"\n{BOLD}{CYAN}--- Bottleneck Analysis: Build {build['id']} ---{RESET}")
+    
+    queue_time = build.get("queueTime")
+    start_time = build.get("startTime")
+    if queue_time and start_time:
+        latency = calculate_duration(queue_time, start_time)
+        color = RED if latency > 30 else YELLOW if latency > 10 else GREEN
+        print(f"{BOLD}Build Start Latency (Agent Starvation):{RESET} {color}{latency:.1f}s{RESET}")
+
+    tasks = []
+    for r in records:
+        if r["type"] == "Task":
+            dur = calculate_duration(r.get("startTime"), r.get("finishTime"))
+            tasks.append((r["name"], dur))
+    
+    tasks.sort(key=lambda x: x[1], reverse=True)
+    print(f"\n{BOLD}Top 3 Slowest Tasks:{RESET}")
+    for i, (name, dur) in enumerate(tasks[:3]):
+        print(f"  {i+1}. {name:<50} | {RED}{dur:>6.1f}s{RESET}")
+    print("-" * 25)
+
+def print_failure_details(records):
+    failed_nodes = [r for r in records if r.get("result") == "failed" and r.get("issues")]
+    if not failed_nodes: return
+
+    print(f"\n{BOLD}{RED}--- Failure Deep-Dive ---{RESET}")
+    for node in failed_nodes:
+        print(f"\n{BOLD}[{node['type']}] {node['name']}{RESET}")
+        for issue in node["issues"]:
+            msg = issue.get("message", "No message")
+            # Clean up ADO message formatting if present
+            msg = re.sub(r'##\[error\]', '', msg)
+            print(f"  {RED}✖{RESET} {msg}")
+            if "logFileLineNumber" in issue.get("data", {}):
+                print(f"    {YELLOW}Log Line:{RESET} {issue['data']['logFileLineNumber']}")
+    print("-" * 25)
+
 def perform_diff(data1, data2):
     b1, b2 = data1["build"], data2["build"]
     print(f"\n{BOLD}{MAGENTA}=== Forensic Build Diff: {b1['id']} vs {b2['id']} ==={RESET}")
@@ -233,6 +272,19 @@ def perform_diff(data1, data2):
             delta_str = f"{'+' if delta > 0 else ''}{delta:.1f}s"
             print(f"{node:<60} | {d1:>14.1f}s | {d2:>14.1f}s | {color}{delta_str}{RESET}")
 
+def list_pipelines(args, pat, project_id):
+    print(f"{BOLD}Organization:{RESET} {CYAN}{args.org}{RESET}")
+    print(f"{BOLD}Project:{RESET}      {YELLOW}{args.project}{RESET}")
+    print("-" * 40)
+    res, status = call_ado_api(args.org, project_id, "pipelines", pat=pat)
+    if status != 200: return
+    pipelines = res.get("value", [])
+    print(f"\n{BOLD}--- Available Pipelines ---{RESET}")
+    print(f"{BLUE}{'ID':<10} | {'Pipeline Name'}{RESET}")
+    print("-" * 40)
+    for p in sorted(pipelines, key=lambda x: x["name"]):
+        print(f"{YELLOW}{p['id']:<10}{RESET} | {p['name']}")
+
 def main():
     git_info = get_git_info()
     parser = argparse.ArgumentParser(description=f"{BOLD}azval: Advanced Azure DevOps YAML Validator {RESET}", formatter_class=argparse.RawTextHelpFormatter)
@@ -248,8 +300,10 @@ def main():
     parser.add_argument("-r", "--run-id", type=int, nargs="+", help="Run ID(s). Provide two IDs for --diff mode.")
     parser.add_argument("-d", "--deep-scan", action="store_true", help="Extract detailed agent metadata")
     parser.add_argument("-l", "--list", action="store_true", help="List all pipelines")
-    parser.add_argument("-B", "--blame", action="store_true", help="Show build metadata (user, branch, reason)")
-    parser.add_argument("--diff", action="store_true", help="Compare two run IDs provided in -r")
+    parser.add_argument("-B", "--blame", action="store_true", help="Show build metadata")
+    parser.add_argument("-a", "--analyze", action="store_true", help="Identify slowest tasks")
+    parser.add_argument("-E", "--errors", action="store_true", help="Show detailed failure messages")
+    parser.add_argument("--diff", action="store_true", help="Compare two run IDs")
     
     args = parser.parse_args()
     if not args.project: print(f"{RED}Error: Project not detected.{RESET}"); sys.exit(1)
@@ -274,7 +328,7 @@ def main():
 
     if args.diff:
         if not args.run_id or len(args.run_id) < 2:
-            print(f"{RED}Error: --diff requires two run IDs via -r flag.{RESET}")
+            print(f"{RED}Error: --diff requires two IDs.{RESET}")
             sys.exit(1)
         data1 = get_full_build_data(args, pat, project_id, args.run_id[0])
         data2 = get_full_build_data(args, pat, project_id, args.run_id[1])
@@ -284,6 +338,10 @@ def main():
                 print_blame_header(data1["build"])
                 print(f"\n{BOLD}[Build 2 Context]{RESET}")
                 print_blame_header(data2["build"])
+            if args.analyze:
+                perform_analysis(data1); perform_analysis(data2)
+            if args.errors:
+                print_failure_details(data1["timeline"]); print_failure_details(data2["timeline"])
             perform_diff(data1, data2)
         else: print(f"{RED}Error: Could not fetch data.{RESET}")
         sys.exit(0)
@@ -295,6 +353,8 @@ def main():
         
         build, records, agent_map = data["build"], data["timeline"], data["agent_map"]
         if args.blame: print_blame_header(build)
+        if args.analyze: perform_analysis(data)
+        if args.errors: print_failure_details(records)
         
         pool_name = build.get("queue", {}).get("name", "Unknown")
         print(f"Timeline for Build ID: {build['id']} (Pool: {pool_name})")
