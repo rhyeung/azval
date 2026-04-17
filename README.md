@@ -1,16 +1,19 @@
-# azval: Azure DevOps YAML Validator
+# azval: Azure DevOps YAML Validator & Performance Forensic Tool
 
 A high-performance, zero-config tool to validate, expand, and analyze Azure DevOps YAML pipelines directly from your terminal.
 
 ## 🚀 Key Features
 
 1.  **Zero-Config Detection:** Automatically extracts your Organization, Project, and Branch from your `git remote origin`.
-2.  **Hierarchical Timeline (`-t`, `--timeline`):** Rich, tree-style visualization of your pipeline performance (Stage ➔ Phase ➔ Job ➔ Step).
-3.  **Deep Agent Scan (`-d`, `--deep-scan`):** (Used with `--timeline`) Peeks into job initialization logs to extract unique **Worker IDs**, **Azure Regions**, and **Runner Images**.
-4.  **Discovery (`-l`, `--list`):** Quickly list all pipelines and their IDs in your project.
-5.  **The Flattener (`-w`, `--write`):** Export fully resolved YAML (post-template expansion) to a local file.
-6.  **Expanded YAML (`-e`, `--expand`):** View the final result of your pipeline in the terminal after all templates and parameters are resolved.
-7.  **Rich Diagnostics:** Provides colorized context and pointers to the exact line/column where a validation error occurred.
+2.  **Hierarchical Timeline (`-t`, `--timeline`):** Rich, tree-style visualization of pipeline performance (Stage ➔ Phase ➔ Job ➔ Step).
+3.  **Run History (`-R`, `--runs`):** Quickly list the last 15 execution runs for your pipeline, including Build Numbers, Results, and Commits.
+4.  **Forensic Build Diff (`--diff`):** Compare two runs side-by-side to identify code changes, parameter shifts, and performance regressions.
+5.  **Bottleneck Predictor (`-a`, `--analyze`):** Automatically identifies the slowest tasks and calculates **Agent Starvation** (Build Start Latency).
+6.  **Failure Deep-Dive (`-E`, `--errors`):** Extracts error messages and log line numbers directly into the terminal for failed builds.
+7.  **Deep Agent Scan (`-d`, `--deep-scan`):** Peeks into logs to extract unique **Worker IDs**, **Azure Regions**, and **Runner Images**.
+8.  **Build Blame (`-B`, `--blame`):** Displays build metadata including the requesting user, trigger reason, and commit message.
+9.  **Attempt History (`-H`, `--attempts`):** Compares multiple attempts (retries) for the same job to identify flaky infrastructure.
+10. **The Flattener (`-w`, `--write`):** Export fully resolved YAML (post-template expansion) to a local file.
 
 ## 🛠 Usage
 
@@ -22,44 +25,48 @@ export ADO_TOKEN="your-token-here"
 
 ### Examples
 
-**List all pipelines in the current project:**
+**List the recent run history to find Build IDs:**
 ```bash
-azval -l
+azval -R
 ```
 
-**Show hierarchical performance analysis for the last run:**
+**Compare two builds for performance regressions:**
 ```bash
-azval -t
+azval -r 1001 1002 --diff -a
 ```
 
-**Run a Deep Scan to identify specific parallel runners and regions:**
+**Perform a forensic deep-dive into a failed build:**
 ```bash
-azval -t -r 1713 -d
+azval -t -r 1005 -B -E -d
 ```
 
-**Flatten your pipeline for local inspection:**
+**List all pipelines in a specific project:**
 ```bash
-azval -w
-# Opens .expanded-pipeline.yml in IDE
+azval -o YOUR_ORG -p YOUR_PROJECT -l
 ```
 
-**Show expanded YAML with parameters:**
+**Validate local YAML with parameters and expand it:**
 ```bash
-azval -e -v service_type=ECS -v env=dev
+azval -e -v env=prod -v service=api
 ```
 
-## 🏗 Performance X-Ray
-The `--timeline` feature provides a detailed tree view including:
-- Stage, Phase, and Job durations.
-- Parallel job slot/worker names.
-- Individual task durations for bottleneck identification.
-- Automatic duration summation for parent containers.
+## 🏗 Performance & Diagnostics
 
-### Deep Scan Metadata
-When `-d` or `--deep-scan` is enabled, the tool performs additional API calls to resolve:
+### Bottleneck Analysis (`-a`)
+Reports critical metrics to help optimize your CI/CD:
+- **Build Start Latency:** Shows how long your build waited in the queue (Agent Starvation).
+- **Top 3 Slowest Tasks:** Instantly highlights which steps are delaying your deployment.
+
+### Deep Scan Metadata (`-d`)
+When enabled, the tool performs additional API calls to resolve:
 - **Worker ID:** The unique GUID of the specific runner instance (crucial for parallel jobs sharing the same machine name).
-- **Azure Region:** Where the runner is physically located (e.g., `australiasoutheast`).
-- **Runner Image:** The specific OS image used (e.g., `ubuntu-24.04`).
+- **Azure Region:** The physical location of the runner.
+- **Runner Image:** The specific OS image version used.
+
+### Failure Deep-Dive (`-E`)
+Aggregates errors from the build timeline so you don't have to scroll through logs:
+- **Error Message:** The exact reason the task failed.
+- **Log Line:** The specific line number in the console output to investigate.
 
 ## ⚠️ Important: The "First Push" Rule
 

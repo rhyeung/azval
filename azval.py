@@ -226,17 +226,34 @@ def print_failure_details(records):
         print(f"\n{BOLD}[{node['type']}] {node['name']}{RESET}")
         for issue in node["issues"]:
             msg = issue.get("message", "No message")
-            # Clean up ADO message formatting if present
             msg = re.sub(r'##\[error\]', '', msg)
             print(f"  {RED}✖{RESET} {msg}")
             if "logFileLineNumber" in issue.get("data", {}):
                 print(f"    {YELLOW}Log Line:{RESET} {issue['data']['logFileLineNumber']}")
     print("-" * 25)
 
+def print_attempt_history(records):
+    retry_nodes = [r for r in records if r.get("attempt", 1) > 1 or r.get("previousAttempts")]
+    if not retry_nodes: return
+
+    print(f"\n{BOLD}{YELLOW}--- Attempt History (Retries) ---{RESET}")
+    for node in retry_nodes:
+        print(f"\n{BOLD}[{node['type']}] {node['name']}{RESET}")
+        attempts = []
+        curr_dur = calculate_duration(node.get("startTime"), node.get("finishTime"))
+        attempts.append({"num": node.get("attempt", 1), "dur": curr_dur, "res": node.get("result")})
+        for prev in node.get("previousAttempts", []):
+            prev_dur = calculate_duration(prev.get("startTime"), prev.get("finishTime"))
+            attempts.append({"num": prev.get("attempt"), "dur": prev_dur, "res": prev.get("result")})
+        attempts.sort(key=lambda x: x["num"])
+        for a in attempts:
+            res_color = GREEN if a["res"] == "succeeded" else RED if a["res"] == "failed" else YELLOW
+            print(f"  Attempt {a['num']}: {a['dur']:>6.1f}s | {res_color}{a['res']}{RESET}")
+    print("-" * 25)
+
 def perform_diff(data1, data2):
     b1, b2 = data1["build"], data2["build"]
     print(f"\n{BOLD}{MAGENTA}=== Forensic Build Diff: {b1['id']} vs {b2['id']} ==={RESET}")
-    
     print(f"\n{BOLD}{BLUE}[1. Source Code]{RESET}")
     print(f"Build {b1['id']}: {CYAN}{b1['sourceBranch']}{RESET} @ {YELLOW}{b1['sourceVersion'][:8]}{RESET}")
     print(f"Build {b2['id']}: {CYAN}{b2['sourceBranch']}{RESET} @ {YELLOW}{b2['sourceVersion'][:8]}{RESET}")
@@ -260,7 +277,6 @@ def perform_diff(data1, data2):
     print(f"\n{BOLD}{BLUE}[3. Performance Regression (Duration)]{RESET}")
     t1 = {r["name"]: calculate_duration(r.get("startTime"), r.get("finishTime")) for r in data1["timeline"] if r["type"] in ["Stage", "Job", "Task"]}
     t2 = {r["name"]: calculate_duration(r.get("startTime"), r.get("finishTime")) for r in data2["timeline"] if r["type"] in ["Stage", "Job", "Task"]}
-    
     print(f"{'Node Name':<60} | {'Build '+str(b1['id']):<15} | {'Build '+str(b2['id']):<15} | {'Delta'}")
     print("-" * 105)
     all_nodes = sorted(set(t1.keys()) | set(t2.keys()))
@@ -285,6 +301,25 @@ def list_pipelines(args, pat, project_id):
     for p in sorted(pipelines, key=lambda x: x["name"]):
         print(f"{YELLOW}{p['id']:<10}{RESET} | {p['name']}")
 
+def list_runs(args, pat, project_id, pipeline_id):
+    print(f"{BOLD}Organization:{RESET} {CYAN}{args.org}{RESET}")
+    print(f"{BOLD}Project:{RESET}      {YELLOW}{args.project}{RESET}")
+    print("-" * 40)
+    res, status = call_ado_api(args.org, project_id, f"build/builds?definitions={pipeline_id}&$top=15&api-version=7.1", pat=pat)
+    if status != 200: return
+    builds = res.get("value", [])
+    print(f"\n{BOLD}--- Recent Runs for Pipeline {pipeline_id} ---{RESET}")
+    print(f"{BLUE}{'Run ID':<10} | {'Build Number':<20} | {'Result':<12} | {'Branch':<25} | {'Commit'}{RESET}")
+    print("-" * 85)
+    for b in builds:
+        rid = b['id']
+        num = b['buildNumber']
+        res = b.get('result', 'inProgress')
+        res_color = GREEN if res == 'succeeded' else RED if res == 'failed' else YELLOW
+        ref = b.get('sourceBranch', 'N/A').replace('refs/heads/', '')
+        sha = b.get('sourceVersion', 'N/A')[:8]
+        print(f"{YELLOW}{rid:<10}{RESET} | {num:<20} | {res_color}{res:<12}{RESET} | {ref:<25} | {sha}")
+
 def main():
     git_info = get_git_info()
     parser = argparse.ArgumentParser(description=f"{BOLD}azval: Advanced Azure DevOps YAML Validator {RESET}", formatter_class=argparse.RawTextHelpFormatter)
@@ -300,16 +335,30 @@ def main():
     parser.add_argument("-r", "--run-id", type=int, nargs="+", help="Run ID(s). Provide two IDs for --diff mode.")
     parser.add_argument("-d", "--deep-scan", action="store_true", help="Extract detailed agent metadata")
     parser.add_argument("-l", "--list", action="store_true", help="List all pipelines")
+    parser.add_argument("-R", "--runs", action="store_true", help="List recent runs for the pipeline")
     parser.add_argument("-B", "--blame", action="store_true", help="Show build metadata")
     parser.add_argument("-a", "--analyze", action="store_true", help="Identify slowest tasks")
     parser.add_argument("-E", "--errors", action="store_true", help="Show detailed failure messages")
+    parser.add_argument("-H", "--attempts", action="store_true", help="Show history of job retries")
     parser.add_argument("--diff", action="store_true", help="Compare two run IDs")
     
     args = parser.parse_args()
     if not args.project: print(f"{RED}Error: Project not detected.{RESET}"); sys.exit(1)
     pat = os.getenv("ADO_PAT") or os.getenv("ADO_TOKEN")
     if not pat: print(f"{RED}Error: ADO_PAT/TOKEN not set.{RESET}"); sys.exit(1)
+
+    # Dependency Logic & Defaults
+    forensic_flags = [args.analyze, args.blame, args.deep_scan, args.errors, args.attempts]
+    if any(forensic_flags) and not (args.timeline or args.diff):
+        if args.run_id: args.timeline = True
+        else: print(f"{RED}Error: Analysis flags require -t/--timeline or --diff.{RESET}"); sys.exit(1)
     
+    if args.run_id and not (args.timeline or args.diff):
+        args.timeline = True
+        
+    if args.list and (args.timeline or args.diff or args.expand or args.write or args.runs):
+        print(f"{RED}Error: --list (-l) is mutually exclusive with other modes.{RESET}"); sys.exit(1)
+
     print(f"{BOLD}--- azval ---{RESET}")
     res, status = call_ado_api(args.org, None, f"projects/{args.project}", pat=pat)
     if status != 200: print(f"{RED}Error: Project '{args.project}' not found.{RESET}"); sys.exit(1)
@@ -319,12 +368,17 @@ def main():
         list_pipelines(args, pat, project_id)
         sys.exit(0)
 
+    # Resolve Pipeline ID
     res, status = call_ado_api(args.org, project_id, "pipelines", pat=pat)
     pipeline_id = args.id
     if not pipeline_id and status == 200:
         pipelines = res.get("value", [])
         pipeline_id = next((p["id"] for p in pipelines if args.project.lower() in p["name"].lower()), pipelines[0]["id"] if pipelines else None)
     if not pipeline_id: print(f"{RED}Error: No pipelines found.{RESET}"); sys.exit(1)
+
+    if args.runs:
+        list_runs(args, pat, project_id, pipeline_id)
+        sys.exit(0)
 
     if args.diff:
         if not args.run_id or len(args.run_id) < 2:
@@ -338,10 +392,9 @@ def main():
                 print_blame_header(data1["build"])
                 print(f"\n{BOLD}[Build 2 Context]{RESET}")
                 print_blame_header(data2["build"])
-            if args.analyze:
-                perform_analysis(data1); perform_analysis(data2)
-            if args.errors:
-                print_failure_details(data1["timeline"]); print_failure_details(data2["timeline"])
+            if args.analyze: perform_analysis(data1); perform_analysis(data2)
+            if args.errors: print_failure_details(data1["timeline"]); print_failure_details(data2["timeline"])
+            if args.attempts: print_attempt_history(data1["timeline"]); print_attempt_history(data2["timeline"])
             perform_diff(data1, data2)
         else: print(f"{RED}Error: Could not fetch data.{RESET}")
         sys.exit(0)
@@ -350,15 +403,13 @@ def main():
         run_id = args.run_id[0] if args.run_id else None
         data = get_full_build_data(args, pat, project_id, run_id)
         if not data: print(f"{RED}Error: Could not fetch build data.{RESET}"); sys.exit(1)
-        
         build, records, agent_map = data["build"], data["timeline"], data["agent_map"]
         if args.blame: print_blame_header(build)
         if args.analyze: perform_analysis(data)
         if args.errors: print_failure_details(records)
-        
+        if args.attempts: print_attempt_history(records)
         pool_name = build.get("queue", {}).get("name", "Unknown")
         print(f"Timeline for Build ID: {build['id']} (Pool: {pool_name})")
-        
         nodes_by_parent = {}
         roots = []
         for r in records:
@@ -388,7 +439,6 @@ def main():
     body = { "templateParameters": params, "resources": {"repositories": {"self": {"refName": f"refs/heads/{context_branch}"}}} }
     if args.file and os.path.exists(args.file):
         with open(args.file, 'r') as f: body["yamlOverride"] = f.read()
-    
     print(f"Validating (Preview API)... ", end="", flush=True)
     res, status = call_ado_api(args.org, project_id, f"pipelines/{pipeline_id}/preview", method="POST", body=body, pat=pat)
     if status in [200, 201]:
