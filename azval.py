@@ -65,7 +65,10 @@ def call_ado_api(org, project, endpoint, method="GET", body=None, pat=None):
     try:
         with urllib.request.urlopen(req) as response:
             content = response.read().decode('utf-8', errors='ignore')
-            return json.loads(content), response.status
+            try:
+                return json.loads(content), response.status
+            except json.JSONDecodeError:
+                return content, response.status
     except urllib.error.HTTPError as e:
         try: return json.loads(e.read().decode()), e.code
         except: return {"message": str(e)}, e.code
@@ -100,10 +103,33 @@ def strip_ansi(text):
 
 def get_visible_width(text):
     stripped = strip_ansi(text)
-    emoji_count = len(re.findall(r'[🎭📂⚙🔹]', stripped))
+    emoji_count = len(re.findall(r'[🎭📂⚙🔹▪️]', stripped))
     return len(stripped) + emoji_count
 
-def print_timeline_tree(node, nodes_by_parent, prefix="", is_last=True, is_root=False):
+def get_agent_info(args, pat, project_id, run_id, log_id):
+    if not log_id: return None
+    res, status = call_ado_api(args.org, project_id, f"build/builds/{run_id}/logs/{log_id}?api-version=7.1", pat=pat)
+    if status != 200: return None
+    log_text = ""
+    if isinstance(res, dict) and "value" in res: log_text = "\n".join(str(l) for l in res["value"])
+    elif isinstance(res, list): log_text = "\n".join(str(l) for l in res)
+    else: log_text = str(res)
+    
+    info = {}
+    vm = re.search(r"Agent machine name:\s*['\"]([^'\"]+)['\"]", log_text)
+    img = re.search(r"Image:\s*([^\s\n\r]+)", log_text)
+    if vm: info["vm"] = vm.group(1)
+    if img: info["img"] = img.group(1)
+    
+    wid = re.search(r"Worker ID:\s*\{?([a-f0-9-]+)\}?", log_text, re.IGNORECASE)
+    if wid: info["wid"] = wid.group(1)[:8]
+    
+    reg = re.search(r"Azure Region:\s*([^\s\n\r]+)", log_text)
+    if reg: info["region"] = reg.group(1)
+    
+    return info
+
+def print_timeline_tree(node, nodes_by_parent, prefix="", is_last=True, is_root=False, agent_map=None):
     dur = calculate_duration(node.get("startTime"), node.get("finishTime"))
     if node["type"] in ["Checkpoint"]: return
     result = node.get("result", "unknown")
@@ -111,12 +137,24 @@ def print_timeline_tree(node, nodes_by_parent, prefix="", is_last=True, is_root=
     icons = {"Stage": "🎭", "Phase": "📂", "Job": "⚙️", "Task": "🔹"}
     icon = icons.get(node["type"], "▪️")
     name = node["name"]
-    if node["type"] == "Job" and node.get("workerName"):
-        name = f"{name} ({node['workerName']})"
+    
+    if node["type"] == "Job":
+        worker = node.get("workerName", "")
+        info = agent_map.get(node["id"]) if agent_map else None
+        if info:
+            parts = [worker]
+            if "vm" in info: parts.append(info["vm"])
+            if "wid" in info: parts.append(f"WID:{info['wid']}")
+            if "img" in info: parts.append(info["img"])
+            if "region" in info: parts.append(info["region"])
+            name = f"{name} ({' | '.join(parts)})"
+        elif worker:
+            name = f"{name} ({worker})"
+
     tree_marker = "" if is_root else ("└── " if is_last else "├── ")
     display_text = f"{prefix}{tree_marker}{icon} {name}"
     visible_len = get_visible_width(display_text)
-    limit = 80
+    limit = 110
     if visible_len > limit:
         display_text = display_text[:(len(display_text) - (visible_len - limit) - 3)] + "..."
         visible_len = limit
@@ -127,19 +165,37 @@ def print_timeline_tree(node, nodes_by_parent, prefix="", is_last=True, is_root=
     children.sort(key=lambda x: x.get("order", 0))
     visible_children = [c for c in children if c["type"] not in ["Checkpoint"]]
     for i, child in enumerate(visible_children):
-        print_timeline_tree(child, nodes_by_parent, new_prefix, i == len(visible_children) - 1)
+        print_timeline_tree(child, nodes_by_parent, new_prefix, i == len(visible_children) - 1, agent_map=agent_map)
 
 def get_timeline(args, pat, project_id, pipeline_id, run_id=None):
     if not run_id:
         res, status = call_ado_api(args.org, project_id, f"pipelines/{pipeline_id}/runs", pat=pat)
         if status == 200 and res.get("value"): run_id = res["value"][0]["id"]
         else: return
-    print(f"Fetching Timeline for Build ID: {run_id}...", end="", flush=True)
+    
+    pool_str = ""
+    if args.deep_scan:
+        build_info, _ = call_ado_api(args.org, project_id, f"build/builds/{run_id}?api-version=7.1", pat=pat)
+        if isinstance(build_info, dict):
+            pool_name = build_info.get("queue", {}).get("name", "Unknown")
+            pool_str = f" (Pool: {pool_name})"
+
+    print(f"Fetching Timeline for Build ID: {run_id}{pool_str}... ", end="", flush=True)
     res, status = call_ado_api(args.org, project_id, f"build/builds/{run_id}/timeline?api-version=7.1-preview.2", pat=pat)
     if status != 200 or "records" not in res:
         print(f" {RED}FAILED{RESET}"); return
-    print(f" {GREEN}OK{RESET}")
+    print(f"{GREEN}OK{RESET}")
     records = res["records"]
+    
+    agent_map = {}
+    if args.deep_scan:
+        for r in records:
+            if r["name"] == "Initialize job":
+                log_id = r.get("log", {}).get("id")
+                if log_id:
+                    info = get_agent_info(args, pat, project_id, run_id, log_id)
+                    if info: agent_map[r["parentId"]] = info
+
     nodes_by_parent = {}
     roots = []
     for r in records:
@@ -148,12 +204,13 @@ def get_timeline(args, pat, project_id, pipeline_id, run_id=None):
         else:
             if pid not in nodes_by_parent: nodes_by_parent[pid] = []
             nodes_by_parent[pid].append(r)
+    
     print(f"\n{BOLD}--- Hierarchical Timeline (Build ID: {run_id}) ---{RESET}")
-    print(f"{BLUE}{'Name':<80} | {'Duration':<10} | {'Result'}{RESET}")
-    print("-" * 105)
+    print(f"{BLUE}{'Name':<110} | {'Duration':<10} | {'Result'}{RESET}")
+    print("-" * 135)
     roots.sort(key=lambda x: x.get("order", 0))
     for i, root in enumerate(roots):
-        print_timeline_tree(root, nodes_by_parent, is_root=True)
+        print_timeline_tree(root, nodes_by_parent, is_root=True, agent_map=agent_map)
 
 def list_pipelines(args, pat, project_id):
     res, status = call_ado_api(args.org, project_id, "pipelines", pat=pat)
@@ -168,17 +225,18 @@ def list_pipelines(args, pat, project_id):
 def main():
     git_info = get_git_info()
     parser = argparse.ArgumentParser(description=f"{BOLD}azval: Advanced Azure DevOps YAML Validator {RESET}", formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("--org", default=git_info["org"] or "YOUR_ORG_NAME")
-    parser.add_argument("--project", default=git_info["project"])
-    parser.add_argument("--id", type=int, help="Pipeline ID override")
-    parser.add_argument("--file", help="Local YAML file")
-    parser.add_argument("--branch", default=git_info["branch"])
-    parser.add_argument("--param", action="append", help="k=v parameters")
-    parser.add_argument("--expand", action="store_true", help="Show fully expanded YAML in terminal")
-    parser.add_argument("--write", nargs="?", const=".expanded-pipeline.yml", help="Write expanded YAML to file (default: .expanded-pipeline.yml)")
-    parser.add_argument("--timeline", action="store_true", help="Show bottleneck analysis")
-    parser.add_argument("--run-id", type=int, help="Specific Run ID for timeline")
-    parser.add_argument("--list", action="store_true", help="List all pipelines in the project")
+    parser.add_argument("-o", "--org", default=git_info["org"] or "YOUR_ORG_NAME")
+    parser.add_argument("-p", "--project", default=git_info["project"])
+    parser.add_argument("-i", "--id", type=int, help="Pipeline ID override")
+    parser.add_argument("-f", "--file", help="Local YAML file")
+    parser.add_argument("-b", "--branch", default=git_info["branch"])
+    parser.add_argument("-v", "--param", action="append", help="k=v parameters")
+    parser.add_argument("-e", "--expand", action="store_true", help="Show fully expanded YAML in terminal")
+    parser.add_argument("-w", "--write", nargs="?", const=".expanded-pipeline.yml", help="Write expanded YAML to file (default: .expanded-pipeline.yml)")
+    parser.add_argument("-t", "--timeline", action="store_true", help="Show bottleneck analysis")
+    parser.add_argument("-r", "--run-id", type=int, help="Specific Run ID for timeline")
+    parser.add_argument("-d", "--deep-scan", action="store_true", help="Extract detailed agent metadata (Worker ID, Region, Image) from logs")
+    parser.add_argument("-l", "--list", action="store_true", help="List all pipelines in the project")
     
     args = parser.parse_args()
     if not args.project: print(f"{RED}Error: Project not detected.{RESET}"); sys.exit(1)
@@ -216,6 +274,7 @@ def main():
         body = { "templateParameters": params, "resources": {"repositories": {"self": {"refName": f"refs/heads/{context_branch}"}}} }
         if args.file and os.path.exists(args.file):
             with open(args.file, 'r') as f: body["yamlOverride"] = f.read()
+        
         print(f"Validating (Preview API)... ", end="", flush=True)
         res, status = call_ado_api(args.org, project_id, f"pipelines/{pipeline_id}/preview", method="POST", body=body, pat=pat)
         success = False
