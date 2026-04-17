@@ -6,7 +6,7 @@ A high-performance, zero-config tool to validate, expand, and analyze Azure DevO
 
 1.  **Zero-Config Detection:** Automatically extracts your Organization, Project, and Branch from your `git remote origin`.
 2.  **Hierarchical Timeline (`-t`, `--timeline`):** Rich, tree-style visualization of pipeline performance (Stage ➔ Phase ➔ Job ➔ Step).
-3.  **Run History (`-R`, `--runs`):** Quickly list the last 15 execution runs for your pipeline, including Build Numbers, Results, and Commits.
+3.  **Run History (`-R`, `--runs`):** Quickly list the last 15 execution runs for your pipeline, including **Total Run Times**, Build Numbers, Results, and Commits.
 4.  **Forensic Build Diff (`--diff`):** Compare two runs side-by-side to identify code changes, parameter shifts, and performance regressions.
 5.  **Bottleneck Predictor (`-a`, `--analyze`):** Automatically identifies the slowest tasks and calculates **Agent Starvation** (Build Start Latency).
 6.  **Failure Deep-Dive (`-E`, `--errors`):** Extracts error messages and log line numbers directly into the terminal for failed builds.
@@ -25,7 +25,7 @@ export ADO_TOKEN="your-token-here"
 
 ### Examples
 
-**List the recent run history to find Build IDs:**
+**List the recent run history to find Build IDs and durations:**
 ```bash
 azval -R
 ```
