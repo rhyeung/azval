@@ -329,24 +329,36 @@ def list_runs(args, pat, project_id, pipeline_id):
 def main():
     git_info = get_git_info()
     parser = argparse.ArgumentParser(description=f"{BOLD}azval: Advanced Azure DevOps YAML Validator {RESET}", formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("-o", "--org", default=git_info["org"] or "YOUR_ORG_NAME")
-    parser.add_argument("-p", "--project", default=git_info["project"])
-    parser.add_argument("-i", "--id", type=int, help="Pipeline ID override")
-    parser.add_argument("-f", "--file", help="Local YAML file")
-    parser.add_argument("-b", "--branch", default=git_info["branch"])
-    parser.add_argument("-v", "--param", action="append", help="k=v parameters")
-    parser.add_argument("-e", "--expand", action="store_true", help="Show fully expanded YAML in terminal")
-    parser.add_argument("-w", "--write", nargs="?", const=".expanded-pipeline.yml", help="Write expanded YAML to file")
-    parser.add_argument("-t", "--timeline", action="store_true", help="Show bottleneck analysis")
-    parser.add_argument("-r", "--run-id", type=int, nargs="+", help="Run ID(s). Provide two IDs for --diff mode.")
-    parser.add_argument("-d", "--deep-scan", action="store_true", help="Extract detailed agent metadata")
-    parser.add_argument("-l", "--list", action="store_true", help="List all pipelines")
-    parser.add_argument("-R", "--runs", action="store_true", help="List recent runs for the pipeline")
-    parser.add_argument("-B", "--blame", action="store_true", help="Show build metadata")
-    parser.add_argument("-a", "--analyze", action="store_true", help="Identify slowest tasks")
-    parser.add_argument("-E", "--errors", action="store_true", help="Show detailed failure messages")
-    parser.add_argument("-H", "--attempts", action="store_true", help="Show history of job retries")
-    parser.add_argument("--diff", action="store_true", help="Compare two run IDs")
+    
+    # 1. Project Context Group
+    ctx_group = parser.add_argument_group("Project Context")
+    ctx_group.add_argument("-o", "--org", default=git_info["org"] or "YOUR_ORG_NAME", help="Azure DevOps Organization")
+    ctx_group.add_argument("-p", "--project", default=git_info["project"], help="Azure DevOps Project")
+    ctx_group.add_argument("-i", "--id", type=int, help="Pipeline ID override")
+    ctx_group.add_argument("-b", "--branch", default=git_info["branch"], help="Branch name")
+
+    # 2. Pipeline Validation Group
+    val_group = parser.add_argument_group("Pipeline Validation")
+    val_group.add_argument("-f", "--file", help="Local YAML file (default: azure-pipelines.yml)")
+    val_group.add_argument("-v", "--param", action="append", help="k=v parameters for template expansion")
+    val_group.add_argument("-e", "--expand", action="store_true", help="Show fully expanded YAML in terminal")
+    val_group.add_argument("-w", "--write", nargs="?", const=".expanded-pipeline.yml", help="Write expanded YAML to file")
+
+    # 3. Forensics & Analysis Group
+    anal_group = parser.add_argument_group("Forensics & Analysis")
+    anal_group.add_argument("-t", "--timeline", action="store_true", help="Show hierarchical performance timeline")
+    anal_group.add_argument("-r", "--run-id", type=int, nargs="+", help="Run ID(s). Provide two IDs for --diff mode.")
+    anal_group.add_argument("-d", "--deep-scan", action="store_true", help="Extract detailed agent metadata (Worker ID, Region)")
+    anal_group.add_argument("-B", "--blame", action="store_true", help="Show build metadata (User, Reason, Commit)")
+    anal_group.add_argument("-a", "--analyze", action="store_true", help="Identify slowest tasks and agent starvation")
+    anal_group.add_argument("-E", "--errors", action="store_true", help="Show detailed failure messages and log lines")
+    anal_group.add_argument("-H", "--attempts", action="store_true", help="Show comparison of job retries/attempts")
+    anal_group.add_argument("--diff", action="store_true", help="Compare two run IDs side-by-side")
+    
+    # 4. Discovery Group
+    disc_group = parser.add_argument_group("Discovery")
+    disc_group.add_argument("-l", "--list", action="store_true", help="List all pipelines in the project")
+    disc_group.add_argument("-R", "--runs", action="store_true", help="List recent run history for the pipeline")
     
     args = parser.parse_args()
     if not args.project: print(f"{RED}Error: Project not detected.{RESET}"); sys.exit(1)
@@ -399,7 +411,7 @@ def main():
             if args.errors: print_failure_details(data1["timeline"]); print_failure_details(data2["timeline"])
             if args.attempts: print_attempt_history(data1["timeline"]); print_attempt_history(data2["timeline"])
             perform_diff(data1, data2)
-        else: print(f"{RED}Error: Could not fetch data.{RESET}")
+        else: print(f"{RED}Error: Could not fetch build data.{RESET}")
         sys.exit(0)
 
     if args.timeline:
