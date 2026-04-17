@@ -98,6 +98,11 @@ def calculate_duration(start_str, finish_str):
         return (finish - start).total_seconds()
     except: return 0.0
 
+def format_duration(seconds):
+    if seconds <= 0: return "N/A"
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m {s}s" if m > 0 else f"{s}s"
+
 def strip_ansi(text):
     return re.sub(r'\033\[[0-9;]*m', '', text).replace('\ufe0f', '')
 
@@ -309,16 +314,17 @@ def list_runs(args, pat, project_id, pipeline_id):
     if status != 200: return
     builds = res.get("value", [])
     print(f"\n{BOLD}--- Recent Runs for Pipeline {pipeline_id} ---{RESET}")
-    print(f"{BLUE}{'Run ID':<10} | {'Build Number':<20} | {'Result':<12} | {'Branch':<25} | {'Commit'}{RESET}")
-    print("-" * 85)
+    print(f"{BLUE}{'Run ID':<10} | {'Duration':<10} | {'Result':<12} | {'Branch':<25} | {'Commit'}{RESET}")
+    print("-" * 95)
     for b in builds:
         rid = b['id']
-        num = b['buildNumber']
+        dur_raw = calculate_duration(b.get('startTime'), b.get('finishTime'))
+        dur = format_duration(dur_raw)
         res = b.get('result', 'inProgress')
         res_color = GREEN if res == 'succeeded' else RED if res == 'failed' else YELLOW
         ref = b.get('sourceBranch', 'N/A').replace('refs/heads/', '')
         sha = b.get('sourceVersion', 'N/A')[:8]
-        print(f"{YELLOW}{rid:<10}{RESET} | {num:<20} | {res_color}{res:<12}{RESET} | {ref:<25} | {sha}")
+        print(f"{YELLOW}{rid:<10}{RESET} | {dur:<10} | {res_color}{res:<12}{RESET} | {ref:<25} | {sha}")
 
 def main():
     git_info = get_git_info()
@@ -347,15 +353,13 @@ def main():
     pat = os.getenv("ADO_PAT") or os.getenv("ADO_TOKEN")
     if not pat: print(f"{RED}Error: ADO_PAT/TOKEN not set.{RESET}"); sys.exit(1)
 
-    # Dependency Logic & Defaults
+    # Dependency Logic
     forensic_flags = [args.analyze, args.blame, args.deep_scan, args.errors, args.attempts]
     if any(forensic_flags) and not (args.timeline or args.diff):
         if args.run_id: args.timeline = True
         else: print(f"{RED}Error: Analysis flags require -t/--timeline or --diff.{RESET}"); sys.exit(1)
-    
     if args.run_id and not (args.timeline or args.diff):
         args.timeline = True
-        
     if args.list and (args.timeline or args.diff or args.expand or args.write or args.runs):
         print(f"{RED}Error: --list (-l) is mutually exclusive with other modes.{RESET}"); sys.exit(1)
 
@@ -368,7 +372,6 @@ def main():
         list_pipelines(args, pat, project_id)
         sys.exit(0)
 
-    # Resolve Pipeline ID
     res, status = call_ado_api(args.org, project_id, "pipelines", pat=pat)
     pipeline_id = args.id
     if not pipeline_id and status == 200:
