@@ -1,4 +1,4 @@
 fileignoreconfig:
 - filename: azval.py
-  checksum: cc6f45364d3e1db4bc6c1a397be08844aa7b678137d88ad2b461b4a5b761a5de
+  checksum: 3534861c5cefbac8b8a82f025ca91ab6f1c0f1959e23cd769804108c1d961af8
 version: "1.0"

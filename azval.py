@@ -120,13 +120,10 @@ def get_agent_info(args, pat, project_id, run_id, log_id):
     img = re.search(r"Image:\s*([^\s\n\r]+)", log_text)
     if vm: info["vm"] = vm.group(1)
     if img: info["img"] = img.group(1)
-    
     wid = re.search(r"Worker ID:\s*\{?([a-f0-9-]+)\}?", log_text, re.IGNORECASE)
     if wid: info["wid"] = wid.group(1)[:8]
-    
     reg = re.search(r"Azure Region:\s*([^\s\n\r]+)", log_text)
     if reg: info["region"] = reg.group(1)
-    
     return info
 
 def print_timeline_tree(node, nodes_by_parent, prefix="", is_last=True, is_root=False, agent_map=None):
@@ -167,60 +164,74 @@ def print_timeline_tree(node, nodes_by_parent, prefix="", is_last=True, is_root=
     for i, child in enumerate(visible_children):
         print_timeline_tree(child, nodes_by_parent, new_prefix, i == len(visible_children) - 1, agent_map=agent_map)
 
-def get_timeline(args, pat, project_id, pipeline_id, run_id=None):
-    if not run_id:
-        res, status = call_ado_api(args.org, project_id, f"pipelines/{pipeline_id}/runs", pat=pat)
-        if status == 200 and res.get("value"): run_id = res["value"][0]["id"]
-        else: return
-    
-    pool_str = ""
-    if args.deep_scan:
-        build_info, _ = call_ado_api(args.org, project_id, f"build/builds/{run_id}?api-version=7.1", pat=pat)
-        if isinstance(build_info, dict):
-            pool_name = build_info.get("queue", {}).get("name", "Unknown")
-            pool_str = f" (Pool: {pool_name})"
+def get_full_build_data(args, pat, project_id, run_id):
+    data = {"build": None, "timeline": None, "agent_map": {}}
+    res, status = call_ado_api(args.org, project_id, f"build/builds/{run_id}?api-version=7.1", pat=pat)
+    if status == 200: data["build"] = res
+    else: return None
 
-    print(f"Fetching Timeline for Build ID: {run_id}{pool_str}... ", end="", flush=True)
     res, status = call_ado_api(args.org, project_id, f"build/builds/{run_id}/timeline?api-version=7.1-preview.2", pat=pat)
-    if status != 200 or "records" not in res:
-        print(f" {RED}FAILED{RESET}"); return
-    print(f"{GREEN}OK{RESET}")
-    records = res["records"]
-    
-    agent_map = {}
-    if args.deep_scan:
-        for r in records:
-            if r["name"] == "Initialize job":
-                log_id = r.get("log", {}).get("id")
-                if log_id:
-                    info = get_agent_info(args, pat, project_id, run_id, log_id)
-                    if info: agent_map[r["parentId"]] = info
+    if status == 200 and "records" in res:
+        data["timeline"] = res["records"]
+        if args.deep_scan:
+            for r in res["records"]:
+                if r["name"] == "Initialize job":
+                    log_id = r.get("log", {}).get("id")
+                    if log_id:
+                        info = get_agent_info(args, pat, project_id, run_id, log_id)
+                        if info: data["agent_map"][r["parentId"]] = info
+    return data
 
-    nodes_by_parent = {}
-    roots = []
-    for r in records:
-        pid = r.get("parentId")
-        if not pid: roots.append(r)
-        else:
-            if pid not in nodes_by_parent: nodes_by_parent[pid] = []
-            nodes_by_parent[pid].append(r)
+def print_blame_header(build):
+    user = build.get("requestedFor", {}).get("displayName", "Unknown")
+    reason = build.get("reason", "Unknown")
+    branch = build.get("sourceBranch", "").replace("refs/heads/", "")
+    commit = build.get("sourceVersion", "")[:8]
     
-    print(f"\n{BOLD}--- Hierarchical Timeline (Build ID: {run_id}) ---{RESET}")
-    print(f"{BLUE}{'Name':<110} | {'Duration':<10} | {'Result'}{RESET}")
-    print("-" * 135)
-    roots.sort(key=lambda x: x.get("order", 0))
-    for i, root in enumerate(roots):
-        print_timeline_tree(root, nodes_by_parent, is_root=True, agent_map=agent_map)
+    print(f"\n{BOLD}{BLUE}--- Build Blame ---{RESET}")
+    print(f"{BOLD}Requested By:{RESET} {CYAN}{user}{RESET}")
+    print(f"{BOLD}Trigger Reason:{RESET} {YELLOW}{reason}{RESET}")
+    print(f"{BOLD}Source:{RESET} {GREEN}{branch}{RESET} @ {YELLOW}{commit}{RESET}")
+    print("-" * 25)
 
-def list_pipelines(args, pat, project_id):
-    res, status = call_ado_api(args.org, project_id, "pipelines", pat=pat)
-    if status != 200: return
-    pipelines = res.get("value", [])
-    print(f"\n{BOLD}--- Available Pipelines ---{RESET}")
-    print(f"{BLUE}{'ID':<10} | {'Pipeline Name'}{RESET}")
-    print("-" * 40)
-    for p in sorted(pipelines, key=lambda x: x["name"]):
-        print(f"{YELLOW}{p['id']:<10}{RESET} | {p['name']}")
+def perform_diff(data1, data2):
+    b1, b2 = data1["build"], data2["build"]
+    print(f"\n{BOLD}{MAGENTA}=== Forensic Build Diff: {b1['id']} vs {b2['id']} ==={RESET}")
+    
+    print(f"\n{BOLD}{BLUE}[1. Source Code]{RESET}")
+    print(f"Build {b1['id']}: {CYAN}{b1['sourceBranch']}{RESET} @ {YELLOW}{b1['sourceVersion'][:8]}{RESET}")
+    print(f"Build {b2['id']}: {CYAN}{b2['sourceBranch']}{RESET} @ {YELLOW}{b2['sourceVersion'][:8]}{RESET}")
+    if b1['sourceVersion'] == b2['sourceVersion']:
+        print(f"{GREEN}Identical commit.{RESET}")
+    else:
+        print(f"{RED}Code changed.{RESET}")
+
+    print(f"\n{BOLD}{BLUE}[2. Parameters & Variables]{RESET}")
+    p1 = json.loads(b1.get("parameters", "{}"))
+    p2 = json.loads(b2.get("parameters", "{}"))
+    all_params = sorted(set(p1.keys()) | set(p2.keys()))
+    changes = False
+    for p in all_params:
+        v1, v2 = p1.get(p), p2.get(p)
+        if v1 != v2:
+            changes = True
+            print(f"{YELLOW}{p:<20}{RESET} | {RED}{str(v1):<20}{RESET} -> {GREEN}{str(v2)}{RESET}")
+    if not changes: print(f"{GREEN}No parameter changes detected.{RESET}")
+
+    print(f"\n{BOLD}{BLUE}[3. Performance Regression (Duration)]{RESET}")
+    t1 = {r["name"]: calculate_duration(r.get("startTime"), r.get("finishTime")) for r in data1["timeline"] if r["type"] in ["Stage", "Job", "Task"]}
+    t2 = {r["name"]: calculate_duration(r.get("startTime"), r.get("finishTime")) for r in data2["timeline"] if r["type"] in ["Stage", "Job", "Task"]}
+    
+    print(f"{'Node Name':<60} | {'Build '+str(b1['id']):<15} | {'Build '+str(b2['id']):<15} | {'Delta'}")
+    print("-" * 105)
+    all_nodes = sorted(set(t1.keys()) | set(t2.keys()))
+    for node in all_nodes:
+        d1, d2 = t1.get(node, 0.0), t2.get(node, 0.0)
+        delta = d2 - d1
+        if abs(delta) > 1.0:
+            color = RED if delta > 5.0 else YELLOW if delta > 2.0 else RESET
+            delta_str = f"{'+' if delta > 0 else ''}{delta:.1f}s"
+            print(f"{node:<60} | {d1:>14.1f}s | {d2:>14.1f}s | {color}{delta_str}{RESET}")
 
 def main():
     git_info = get_git_info()
@@ -232,18 +243,19 @@ def main():
     parser.add_argument("-b", "--branch", default=git_info["branch"])
     parser.add_argument("-v", "--param", action="append", help="k=v parameters")
     parser.add_argument("-e", "--expand", action="store_true", help="Show fully expanded YAML in terminal")
-    parser.add_argument("-w", "--write", nargs="?", const=".expanded-pipeline.yml", help="Write expanded YAML to file (default: .expanded-pipeline.yml)")
+    parser.add_argument("-w", "--write", nargs="?", const=".expanded-pipeline.yml", help="Write expanded YAML to file")
     parser.add_argument("-t", "--timeline", action="store_true", help="Show bottleneck analysis")
-    parser.add_argument("-r", "--run-id", type=int, help="Specific Run ID for timeline")
-    parser.add_argument("-d", "--deep-scan", action="store_true", help="Extract detailed agent metadata (Worker ID, Region, Image) from logs")
-    parser.add_argument("-l", "--list", action="store_true", help="List all pipelines in the project")
+    parser.add_argument("-r", "--run-id", type=int, nargs="+", help="Run ID(s). Provide two IDs for --diff mode.")
+    parser.add_argument("-d", "--deep-scan", action="store_true", help="Extract detailed agent metadata")
+    parser.add_argument("-l", "--list", action="store_true", help="List all pipelines")
+    parser.add_argument("-B", "--blame", action="store_true", help="Show build metadata (user, branch, reason)")
+    parser.add_argument("--diff", action="store_true", help="Compare two run IDs provided in -r")
     
     args = parser.parse_args()
     if not args.project: print(f"{RED}Error: Project not detected.{RESET}"); sys.exit(1)
     pat = os.getenv("ADO_PAT") or os.getenv("ADO_TOKEN")
     if not pat: print(f"{RED}Error: ADO_PAT/TOKEN not set.{RESET}"); sys.exit(1)
-    if not args.file and os.path.exists("azure-pipelines.yml"): args.file = "azure-pipelines.yml"
-
+    
     print(f"{BOLD}--- azval ---{RESET}")
     res, status = call_ado_api(args.org, None, f"projects/{args.project}", pat=pat)
     if status != 200: print(f"{RED}Error: Project '{args.project}' not found.{RESET}"); sys.exit(1)
@@ -260,39 +272,76 @@ def main():
         pipeline_id = next((p["id"] for p in pipelines if args.project.lower() in p["name"].lower()), pipelines[0]["id"] if pipelines else None)
     if not pipeline_id: print(f"{RED}Error: No pipelines found.{RESET}"); sys.exit(1)
 
-    if not args.timeline:
-        print(f"Org: {args.org} | Proj: {args.project} ({project_id}) | Branch: {args.branch} | ID: {pipeline_id}")
-        print("-" * 25)
-        context_branch = args.branch
-        if not check_remote_branch(context_branch):
-            context_branch = get_default_remote_branch()
-            print(f"{YELLOW}Branch fallback to '{context_branch}'{RESET}")
-        params = {}
-        if args.param:
-            for p in args.param:
-                if '=' in p: k, v = p.split('=', 1); params[k] = v
-        body = { "templateParameters": params, "resources": {"repositories": {"self": {"refName": f"refs/heads/{context_branch}"}}} }
-        if args.file and os.path.exists(args.file):
-            with open(args.file, 'r') as f: body["yamlOverride"] = f.read()
-        
-        print(f"Validating (Preview API)... ", end="", flush=True)
-        res, status = call_ado_api(args.org, project_id, f"pipelines/{pipeline_id}/preview", method="POST", body=body, pat=pat)
-        success = False
-        if status in [200, 201]:
-            print(f"{GREEN}PASSED{RESET}")
-            if args.expand and "finalYaml" in res:
-                print(f"\n{BOLD}--- Fully Expanded YAML ---{RESET}\n{res['finalYaml']}\n{'-' * 25}")
-            if args.write and "finalYaml" in res:
-                with open(args.write, 'w') as f: f.write(res["finalYaml"])
-                print(f"{BLUE}Expanded YAML written to: {args.write}{RESET}")
-            success = True
-        else:
-            print(f"{RED}FAILED{RESET}")
-            msg = res.get("message", "Unknown error")
-            print(f"{BOLD}Error:{RESET} {msg}")
-            if args.file: highlight_error(args.file, msg)
+    if args.diff:
+        if not args.run_id or len(args.run_id) < 2:
+            print(f"{RED}Error: --diff requires two run IDs via -r flag.{RESET}")
+            sys.exit(1)
+        data1 = get_full_build_data(args, pat, project_id, args.run_id[0])
+        data2 = get_full_build_data(args, pat, project_id, args.run_id[1])
+        if data1 and data2:
+            if args.blame:
+                print(f"\n{BOLD}[Build 1 Context]{RESET}")
+                print_blame_header(data1["build"])
+                print(f"\n{BOLD}[Build 2 Context]{RESET}")
+                print_blame_header(data2["build"])
+            perform_diff(data1, data2)
+        else: print(f"{RED}Error: Could not fetch data.{RESET}")
+        sys.exit(0)
 
-    if args.timeline: get_timeline(args, pat, project_id, pipeline_id, run_id=args.run_id)
-    sys.exit(0 if (args.timeline or success) else 1)
+    if args.timeline:
+        run_id = args.run_id[0] if args.run_id else None
+        data = get_full_build_data(args, pat, project_id, run_id)
+        if not data: print(f"{RED}Error: Could not fetch build data.{RESET}"); sys.exit(1)
+        
+        build, records, agent_map = data["build"], data["timeline"], data["agent_map"]
+        if args.blame: print_blame_header(build)
+        
+        pool_name = build.get("queue", {}).get("name", "Unknown")
+        print(f"Timeline for Build ID: {build['id']} (Pool: {pool_name})")
+        
+        nodes_by_parent = {}
+        roots = []
+        for r in records:
+            pid = r.get("parentId")
+            if not pid: roots.append(r)
+            else:
+                if pid not in nodes_by_parent: nodes_by_parent[pid] = []
+                nodes_by_parent[pid].append(r)
+        print(f"\n{BOLD}--- Hierarchical Timeline (Build ID: {build['id']}) ---{RESET}")
+        print(f"{BLUE}{'Name':<110} | {'Duration':<10} | {'Result'}{RESET}")
+        print("-" * 135)
+        roots.sort(key=lambda x: x.get("order", 0))
+        for i, root in enumerate(roots):
+            print_timeline_tree(root, nodes_by_parent, is_root=True, agent_map=agent_map)
+        sys.exit(0)
+
+    print(f"Org: {args.org} | Proj: {args.project} | Branch: {args.branch} | ID: {pipeline_id}")
+    print("-" * 25)
+    context_branch = args.branch
+    if not check_remote_branch(context_branch):
+        context_branch = get_default_remote_branch()
+        print(f"{YELLOW}Branch fallback to '{context_branch}'{RESET}")
+    params = {}
+    if args.param:
+        for p in args.param:
+            if '=' in p: k, v = p.split('=', 1); params[k] = v
+    body = { "templateParameters": params, "resources": {"repositories": {"self": {"refName": f"refs/heads/{context_branch}"}}} }
+    if args.file and os.path.exists(args.file):
+        with open(args.file, 'r') as f: body["yamlOverride"] = f.read()
+    
+    print(f"Validating (Preview API)... ", end="", flush=True)
+    res, status = call_ado_api(args.org, project_id, f"pipelines/{pipeline_id}/preview", method="POST", body=body, pat=pat)
+    if status in [200, 201]:
+        print(f"{GREEN}PASSED{RESET}")
+        if args.expand and "finalYaml" in res:
+            print(f"\n{BOLD}--- Fully Expanded YAML ---{RESET}\n{res['finalYaml']}\n{'-' * 25}")
+        if args.write and "finalYaml" in res:
+            with open(args.write, 'w') as f: f.write(res["finalYaml"])
+            print(f"{BLUE}Expanded YAML written to: {args.write}{RESET}")
+    else:
+        print(f"{RED}FAILED{RESET}")
+        msg = res.get("message", "Unknown error")
+        print(f"{BOLD}Error:{RESET} {msg}")
+        if args.file: highlight_error(args.file, msg)
 
 if __name__ == "__main__": main()
