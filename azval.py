@@ -310,7 +310,7 @@ def list_runs(args, pat, project_id, pipeline_id):
     print(f"{BOLD}Organization:{RESET} {CYAN}{args.org}{RESET}")
     print(f"{BOLD}Project:{RESET}      {YELLOW}{args.project}{RESET}")
     print("-" * 40)
-    res, status = call_ado_api(args.org, project_id, f"build/builds?definitions={pipeline_id}&$top=15&api-version=7.1", pat=pat)
+    res, status = call_ado_api(args.org, project_id, f"build/builds?definitions={pipeline_id}&$top=15&queryOrder=queueTimeDescending&api-version=7.1&t={int(__import__("time").time())}", pat=pat)
     if status != 200: return
     builds = res.get("value", [])
     print(f"\n{BOLD}--- Recent Runs for Pipeline {pipeline_id} ---{RESET}")
