@@ -367,7 +367,6 @@ def main():
 
     # Dependency Logic & Branch Fallback Fix
     if not args.timeline and not args.diff:
-        # Only fallback if branch was auto-detected and found invalid
         context_branch = args.branch
         if args.branch == git_info["branch"] and not check_remote_branch(context_branch):
             context_branch = get_default_remote_branch()
@@ -393,6 +392,7 @@ def main():
         list_pipelines(args, pat, project_id)
         sys.exit(0)
 
+    # Resolve Pipeline ID
     res, status = call_ado_api(args.org, project_id, "pipelines", pat=pat)
     pipeline_id = args.id
     if not pipeline_id and status == 200:
@@ -420,7 +420,7 @@ def main():
             if args.errors: print_failure_details(data1["timeline"]); print_failure_details(data2["timeline"])
             if args.attempts: print_attempt_history(data1["timeline"]); print_attempt_history(data2["timeline"])
             perform_diff(data1, data2)
-        else: print(f"{RED}Error: Could not fetch build data.{RESET}")
+        else: print(f"{RED}Error: Could not fetch data.{RESET}")
         sys.exit(0)
 
     if args.timeline:
@@ -472,6 +472,8 @@ def main():
         print(f"{RED}FAILED{RESET}")
         msg = res.get("message", "Unknown error")
         print(f"{BOLD}Error:{RESET} {msg}")
+        if any(kw in msg for kw in ["not found in repository", "Unexpected parameter", "Unable to resolve the reference"]):
+            print(f"\n{BOLD}{CYAN}💡 [First Push Rule]:{RESET} This error likely occurred because your local changes haven't been pushed to the remote repository yet. ADO resolves templates and references from the cloud, not your local disk.")
         if args.file: highlight_error(args.file, msg)
 
 if __name__ == "__main__": main()
