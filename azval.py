@@ -365,7 +365,16 @@ def main():
     pat = os.getenv("ADO_PAT") or os.getenv("ADO_TOKEN")
     if not pat: print(f"{RED}Error: ADO_PAT/TOKEN not set.{RESET}"); sys.exit(1)
 
-    # Dependency Logic
+    # Dependency Logic & Branch Fallback Fix
+    if not args.timeline and not args.diff:
+        # Only fallback if branch was auto-detected and found invalid
+        context_branch = args.branch
+        if args.branch == git_info["branch"] and not check_remote_branch(context_branch):
+            context_branch = get_default_remote_branch()
+            print(f"{YELLOW}Branch fallback to '{context_branch}'{RESET}")
+    else:
+        context_branch = args.branch
+
     forensic_flags = [args.analyze, args.blame, args.deep_scan, args.errors, args.attempts]
     if any(forensic_flags) and not (args.timeline or args.diff):
         if args.run_id: args.timeline = True
@@ -443,10 +452,6 @@ def main():
 
     print(f"Org: {args.org} | Proj: {args.project} | Branch: {args.branch} | ID: {pipeline_id}")
     print("-" * 25)
-    context_branch = args.branch
-    if not check_remote_branch(context_branch):
-        context_branch = get_default_remote_branch()
-        print(f"{YELLOW}Branch fallback to '{context_branch}'{RESET}")
     params = {}
     if args.param:
         for p in args.param:
