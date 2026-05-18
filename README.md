@@ -61,6 +61,11 @@ azval -r 3600..3650 --report
 azval -t -r 1005 -B -E -d
 ```
 
+**Compare multiple hierarchical timelines in the terminal:**
+```bash
+azval -r 1001,1005 -t
+```
+
 **List all pipelines in a specific project:**
 ```bash
 azval -o YOUR_ORG -p YOUR_PROJECT -l
