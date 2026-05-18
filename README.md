@@ -14,6 +14,8 @@ A high-performance, zero-config tool to validate, expand, and analyze Azure DevO
 8.  **Build Blame (`-B`, `--blame`):** Displays build metadata including the requesting user, trigger reason, and commit message.
 9.  **Attempt History (`-H`, `--attempts`):** Compares multiple attempts (retries) for the same job to identify flaky infrastructure.
 10. **The Flattener (`-w`, `--write`):** Export fully resolved YAML (post-template expansion) to a local file.
+11. **Visual Reports (`--report`):** Generates an interactive HTML dashboard with task-level performance trends across multiple runs.
+12. **Smart Run Selection (`-r`):** Supports individual Run IDs or numeric ranges (e.g., `3600..3650`) for batch analysis and reporting.
 
 ## 🛠 Usage
 
@@ -39,9 +41,19 @@ By default, `azval` looks at your current directory's Git metadata (`git remote 
 azval -R
 ```
 
+**Generate an interactive HTML performance report for the last 30 runs:**
+```bash
+azval --report
+```
+
 **Compare two builds for performance regressions:**
 ```bash
 azval -r 1001 1002 --diff -a
+```
+
+**Generate a report for a specific range of builds:**
+```bash
+azval -r 3600..3650 --report
 ```
 
 **Perform a forensic deep-dive into a failed build:**
